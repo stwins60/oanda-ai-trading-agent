@@ -1,0 +1,76 @@
+name: oanda-ai-trading-agent
+
+# Values like ${POSTGRES_PASSWORD} are read from .env next to this file.
+
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oanda}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-oanda_agent}
+      # Served over HTTPS via Cloudflare; real visitor IP arrives in this header (used for login lockouts)
+      TRUSTED_CLIENT_IP_HEADER: CF-Connecting-IP
+      COOKIE_SECURE: "true"
+    ports:
+      # Local access only (http://localhost:8001); public access goes through the tunnel
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - market_cache:/app/.cache
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oanda}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-oanda_agent}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No published ports: only reachable by the app on the compose network
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.7
+    command: tunnel --no-autoupdate run
+    networks:
+      - default
+      - fx_default
+    environment:
+      # Until this is set in .env, only this container fails (and retries); app and db run normally
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cloudflared-origin-relay:
+    build: .
+    command: python origin_relay.py
+    environment:
+      ORIGIN_RELAY_LISTEN_HOST: "::1"
+      ORIGIN_RELAY_LISTEN_PORT: 8001
+      ORIGIN_RELAY_TARGET_HOST: app
+      ORIGIN_RELAY_TARGET_PORT: 8000
+    network_mode: service:cloudflared
+    depends_on:
+      app:
+        condition: service_healthy
+      cloudflared:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  market_cache:
+
+networks:
+  fx_default:
+    external: true

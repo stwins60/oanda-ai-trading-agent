@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In · OANDA AI Quant Desk</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #0b0f19; color: #e2e8f0; font-family: Inter, system-ui, sans-serif; }
+    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 0.75rem; }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+  <form id="loginForm" class="panel w-full max-w-sm p-6 space-y-5" autocomplete="on">
+    <div class="flex items-center space-x-3">
+      <div class="w-3.5 h-3.5 rounded-full bg-indigo-500"></div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white">OANDA v20 AI Quant Desk</h1>
+        <p class="text-xs text-slate-400">Operator sign-in required</p>
+      </div>
+    </div>
+
+    <div class="space-y-3">
+      <label class="block">
+        <span class="text-slate-400 text-xs block mb-1">Username</span>
+        <input id="username" name="username" type="text" required autocomplete="username" autofocus
+          class="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
+      </label>
+      <label class="block">
+        <span class="text-slate-400 text-xs block mb-1">Password</span>
+        <input id="password" name="password" type="password" required autocomplete="current-password"
+          class="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
+      </label>
+    </div>
+
+    <p id="loginError" class="hidden text-xs text-rose-400"></p>
+
+    <button id="btnLogin" type="submit"
+      class="w-full px-4 py-2 rounded-lg font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-60">
+      Sign In
+    </button>
+  </form>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const btn = document.getElementById('btnLogin');
+      const errEl = document.getElementById('loginError');
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+      errEl.classList.add('hidden');
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (res.ok) {
+          location.href = '/';
+          return;
+        }
+        const err = await res.json().catch(() => ({}));
+        errEl.textContent = err.detail || 'Sign-in failed.';
+      } catch (e) {
+        errEl.textContent = 'Server unreachable. Check that the agent is running.';
+      }
+      errEl.classList.remove('hidden');
+      document.getElementById('password').value = '';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OANDA v20 Autonomous AI Trading Desk</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { background-color: #0b0f19; color: #e2e8f0; font-family: Inter, system-ui, sans-serif; }
+    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 0.75rem; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen p-4 space-y-4">
+
+  <!-- TOP HEADER & PANEL 1: ACCOUNT SUMMARY + PANEL 5: BOT CONTROL -->
+  <header class="flex flex-wrap items-center justify-between gap-4 panel p-4">
+    <div class="flex items-center space-x-3">
+      <div id="statusDot" class="w-3.5 h-3.5 rounded-full bg-amber-500 animate-pulse"></div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white">OANDA v20 AI Quant Desk</h1>
+        <p id="botStatusText" class="text-xs text-slate-400">Connecting to telemetry stream...</p>
+      </div>
+    </div>
+
+    <!-- Account KPI Metrics -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-6 text-sm">
+      <div>
+        <span class="text-slate-400 text-xs block">Account Balance</span>
+        <span id="kpiBalance" class="font-mono font-semibold text-base text-white">$0.00</span>
+      </div>
+      <div>
+        <span class="text-slate-400 text-xs block">Equity (NAV)</span>
+        <span id="kpiNav" class="font-mono font-semibold text-base text-white">$0.00</span>
+      </div>
+      <div>
+        <span class="text-slate-400 text-xs block">Margin Used / Free</span>
+        <span id="kpiMargin" class="font-mono font-semibold text-base text-slate-200">$0.00</span>
+      </div>
+      <div>
+        <span class="text-slate-400 text-xs block">Unrealized PnL</span>
+        <span id="kpiPnl" class="font-mono font-semibold text-base text-emerald-400">$0.00</span>
+      </div>
+    </div>
+
+    <!-- Bot Control Buttons -->
+    <div class="flex items-center space-x-2">
+      <button id="btnToggleBot" onclick="toggleBot()"
+        class="px-4 py-2 rounded-lg font-semibold text-xs bg-emerald-600 hover:bg-emerald-500 text-white transition">
+        Start Automation
+      </button>
+      <button onclick="scanNow()"
+        class="px-3 py-2 rounded-lg font-medium text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+        Force Scan
+      </button>
+      <button onclick="triggerKillSwitch()"
+        class="px-4 py-2 rounded-lg font-bold text-xs bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30 transition">
+        🚨 KILL SWITCH
+      </button>
+      <button onclick="logout()" title="Sign out"
+        class="px-3 py-2 rounded-lg font-medium text-xs bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 transition">
+        Sign Out
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN GRID: CHART + TECHNICALS + AI SENTIMENT -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <!-- PANEL 2: INTERACTIVE MULTI-PAIR CANDLE CHART (7 COLS) -->
+    <div class="lg:col-span-7 panel p-4 flex flex-col justify-between">
+      <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+        <div class="flex items-center space-x-2">
+          <select id="pairSelect" onchange="loadChart()"
+            class="bg-slate-900 border border-slate-700 rounded-md px-3 py-1.5 text-xs font-semibold text-white">
+            <option value="EUR_USD">EUR_USD</option>
+            <option value="GBP_USD">GBP_USD</option>
+            <option value="USD_JPY">USD_JPY</option>
+          </select>
+          <div class="flex space-x-1">
+            <button onclick="setGranularity('M5')" class="tf-btn px-2.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700">M5</button>
+            <button onclick="setGranularity('M15')" class="tf-btn px-2.5 py-1 rounded text-xs bg-indigo-600 text-white">M15</button>
+            <button onclick="setGranularity('H1')" class="tf-btn px-2.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700">H1</button>
+            <button onclick="setGranularity('H4')" class="tf-btn px-2.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700">H4</button>
+            <button onclick="setGranularity('D')" class="tf-btn px-2.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700">D</button>
+          </div>
+        </div>
+        <div id="mtfBadges" class="flex items-center space-x-2 text-xs"></div>
+      </div>
+
+      <div id="tvChart" class="w-full h-[380px] my-2"></div>
+
+      <!-- Manual Trade Override Bar -->
+      <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span class="text-slate-400 font-medium">Manual Execution Override:</span>
+        <div class="flex items-center space-x-2">
+          <input id="manualUnits" type="number" value="1000" placeholder="Units"
+            class="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono" />
+          <input id="manualSL" type="number" value="20" placeholder="SL Pips"
+            class="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono" title="Stop-Loss Pips" />
+          <input id="manualTP" type="number" value="40" placeholder="TP Pips"
+            class="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono" title="Take-Profit Pips" />
+          <button onclick="submitManualTrade('BUY')"
+            class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded">Buy Market</button>
+          <button onclick="submitManualTrade('SELL')"
+            class="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded">Sell Market</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL 3: AI NEWS & SENTIMENT FEED + MTF CONFLUENCE MATRIX (5 COLS) -->
+    <div class="lg:col-span-5 panel p-4 flex flex-col space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <h2 class="text-sm font-bold text-white">🧠 AI Macro Sentiment & Technical Confluence</h2>
+        <span class="text-xs text-slate-400">LLM Structured Output</span>
+      </div>
+
+      <div id="sentimentCards" class="space-y-3 overflow-y-auto max-h-[430px] pr-1">
+        <p class="text-xs text-slate-500">Waiting for initial sentiment evaluation...</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- BOTTOM GRID: PANEL 4 (ACTIVE POSITIONS) & PANEL 6 (DECISION & AUDIT LOGS) -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <!-- PANEL 4: ACTIVE TRADES & POSITIONS TABLE (6 COLS) -->
+    <div class="lg:col-span-6 panel p-4">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h2 class="text-sm font-bold text-white">📊 Open OANDA Positions & Active Trades</h2>
+        <span id="openTradeCountBadge" class="px-2 py-0.5 text-xs rounded bg-slate-800 text-slate-300">0 Open</span>
+      </div>
+      <div class="overflow-x-auto mt-2">
+        <table class="w-full text-left text-xs">
+          <thead class="text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="py-2">ID</th>
+              <th class="py-2">Pair</th>
+              <th class="py-2">Side / Units</th>
+              <th class="py-2">Entry</th>
+              <th class="py-2">SL / TP</th>
+              <th class="py-2">Unrealized PnL</th>
+              <th class="py-2 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="openTradesBody" class="divide-y divide-slate-800/60 font-mono">
+            <tr><td colspan="7" class="py-4 text-center text-slate-500">No open trades</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- PANEL 6: TRADE DECISION LOG & NOTIFICATION AUDIT TRAIL (6 COLS) -->
+    <div class="lg:col-span-6 panel p-4">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h2 class="text-sm font-bold text-white">📜 Autonomous Decision Log & Alert Audit Trail</h2>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+        <div>
+          <h3 class="text-xs font-semibold text-slate-400 mb-1">Strategy Decisions</h3>
+          <div id="decisionLogList" class="space-y-1.5 max-h-52 overflow-y-auto text-xs font-mono pr-1"></div>
+        </div>
+        <div>
+          <h3 class="text-xs font-semibold text-slate-400 mb-1">Discord / SMTP Audit</h3>
+          <div id="auditLogList" class="space-y-1.5 max-h-52 overflow-y-auto text-xs font-mono pr-1"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- PERFORMANCE PANEL: REALIZED RESULTS FROM OANDA CLOSED-TRADE HISTORY -->
+  <div class="panel p-4 mt-4">
+    <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+      <h2 class="text-sm font-bold text-white">🏁 Realized Performance (Closed Trades)</h2>
+      <span id="perfUpdated" class="text-[11px] text-slate-500">Loading…</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 text-xs">
+      <div><div class="text-slate-400">Realized P/L</div><div id="perfPnl" class="font-mono font-semibold text-base text-white">-</div><div id="perfAcctPl" class="text-[11px] text-slate-500"></div></div>
+      <div><div class="text-slate-400">Closed Trades</div><div id="perfCount" class="font-mono font-semibold text-base text-white">-</div></div>
+      <div><div class="text-slate-400">Win Rate</div><div id="perfWinRate" class="font-mono font-semibold text-base text-white">-</div></div>
+      <div><div class="text-slate-400">Avg Win</div><div id="perfAvgWin" class="font-mono font-semibold text-base text-emerald-400">-</div></div>
+      <div><div class="text-slate-400">Avg Loss</div><div id="perfAvgLoss" class="font-mono font-semibold text-base text-rose-400">-</div></div>
+      <div><div class="text-slate-400">Profit Factor</div><div id="perfPf" class="font-mono font-semibold text-base text-white">-</div></div>
+    </div>
+    <div class="overflow-x-auto mt-3">
+      <table class="w-full text-left text-xs">
+        <thead class="text-slate-400 border-b border-slate-800">
+          <tr><th class="py-2">ID</th><th class="py-2">Pair</th><th class="py-2">Side / Units</th><th class="py-2">Entry → Exit</th><th class="py-2">Closed (UTC)</th><th class="py-2 text-right">P/L</th></tr>
+        </thead>
+        <tbody id="perfTradesBody" class="divide-y divide-slate-800/60 font-mono">
+          <tr><td colspan="6" class="py-4 text-center text-slate-500">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let currentGranularity = 'M15';
+    let chart, candleSeries;
+    let latestState = {};
+    let currentWatchlist = ['EUR_USD', 'GBP_USD', 'USD_JPY'];
+
+    // fetch wrapper: an expired or revoked session sends the operator back to the login page
+    async function api(url, options) {
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        location.href = '/login';
+        throw new Error('Session expired');
+      }
+      return res;
+    }
+
+    async function logout() {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      location.href = '/login';
+    }
+
+    function initChart() {
+      const container = document.getElementById('tvChart');
+      chart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#111827' }, textColor: '#94a3b8' },
+        grid: { vertLines: { color: '#1f2937' }, horzLines: { color: '#1f2937' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#374151' },
+        timeScale: { borderColor: '#374151', timeVisible: true },
+      });
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#10b981', downColor: '#ef4444',
+        borderUpColor: '#10b981', borderDownColor: '#ef4444',
+        wickUpColor: '#10b981', wickDownColor: '#ef4444',
+      });
+      window.addEventListener('resize', () => {
+        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      });
+      loadChart();
+    }
+
+    async function loadChart() {
+      const pair = document.getElementById('pairSelect').value;
+      if (!pair || !chart || !candleSeries) return;
+      const res = await api(`/api/candles/${pair}?granularity=${currentGranularity}&count=200`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.candles && data.candles.length) {
+        candleSeries.setData(data.candles);
+        chart.timeScale().fitContent();
+      }
+      renderMtfBadges();
+    }
+
+    function setGranularity(tf) {
+      currentGranularity = tf;
+      document.querySelectorAll('.tf-btn').forEach(btn => {
+        btn.className = btn.textContent === tf
+          ? 'tf-btn px-2.5 py-1 rounded text-xs bg-indigo-600 text-white'
+          : 'tf-btn px-2.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700';
+      });
+      loadChart();
+    }
+
+    function syncPairSelect(watchlist) {
+      const nextWatchlist = (watchlist && watchlist.length ? watchlist : currentWatchlist)
+        .map(pair => String(pair).trim().toUpperCase())
+        .filter(Boolean);
+      if (!nextWatchlist.length) return;
+
+      const select = document.getElementById('pairSelect');
+      const previous = select.value;
+      const nextPair = nextWatchlist.includes(previous) ? previous : nextWatchlist[0];
+      const optionsChanged = nextWatchlist.join('|') !== currentWatchlist.join('|');
+
+      currentWatchlist = nextWatchlist;
+      if (optionsChanged) {
+        select.innerHTML = currentWatchlist
+          .map(pair => `<option value="${pair}">${pair}</option>`)
+          .join('');
+      }
+      if (select.value !== nextPair) {
+        select.value = nextPair;
+        loadChart();
+      }
+    }
+
+    function renderMtfBadges() {
+      const pair = document.getElementById('pairSelect').value;
+      const tech = (latestState.technicals || {})[pair];
+      const container = document.getElementById('mtfBadges');
+      if (!tech || !tech.timeframes) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = Object.keys(tech.timeframes).map(tf => {
+        const b = tech.timeframes[tf]?.bias || 'NEUTRAL';
+        const color = b.includes('BULL') ? 'bg-emerald-900/60 text-emerald-300 border-emerald-700'
+                    : b.includes('BEAR') ? 'bg-rose-900/60 text-rose-300 border-rose-700'
+                    : 'bg-slate-800 text-slate-300 border-slate-700';
+        return `<span class="px-2 py-0.5 rounded border ${color} font-mono">${tf}: ${b}</span>`;
+      }).join('');
+    }
+
+    function updateDashboard(state) {
+      latestState = state;
+      syncPairSelect(state.watchlist || []);
+      const acc = state.account || {};
+      document.getElementById('kpiBalance').textContent = `$${(acc.balance || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+      document.getElementById('kpiNav').textContent = `$${(acc.nav || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+      document.getElementById('kpiMargin').textContent = `$${(acc.margin_used || 0).toFixed(2)} / $${(acc.margin_available || 0).toFixed(0)}`;
+
+      const pnl = acc.unrealized_pnl || 0;
+      const pnlEl = document.getElementById('kpiPnl');
+      pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+      pnlEl.className = `font-mono font-semibold text-base ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+
+      // Bot status
+      const dot = document.getElementById('statusDot');
+      const statusText = document.getElementById('botStatusText');
+      const btnToggle = document.getElementById('btnToggleBot');
+      if (state.is_running) {
+        dot.className = 'w-3.5 h-3.5 rounded-full bg-emerald-500 animate-ping';
+        statusText.textContent = 'AUTONOMOUS EXECUTION ACTIVE';
+        btnToggle.textContent = 'Pause Automation';
+        btnToggle.className = 'px-4 py-2 rounded-lg font-semibold text-xs bg-amber-600 hover:bg-amber-500 text-white transition';
+      } else {
+        dot.className = 'w-3.5 h-3.5 rounded-full bg-amber-500';
+        statusText.textContent = state.daily_halt_triggered ? 'HALTED: MAX DAILY LOSS BREACHED' : 'STANDBY / MONITORING ONLY';
+        btnToggle.textContent = 'Start Automation';
+        btnToggle.className = 'px-4 py-2 rounded-lg font-semibold text-xs bg-emerald-600 hover:bg-emerald-500 text-white transition';
+      }
+
+      renderMtfBadges();
+
+      // Sentiment & Confluence cards
+      const sentContainer = document.getElementById('sentimentCards');
+      const watchlist = state.watchlist || [];
+      sentContainer.innerHTML = watchlist.map(pair => {
+        const s = (state.sentiment || {})[pair] || {};
+        const t = (state.technicals || {})[pair] || {};
+        const ai = (state.ai_decisions || {})[pair];
+        const mode = state.strategy_mode || 'rules';
+        const aiColor = !ai ? '' : ai.action === 'BUY' ? 'text-emerald-300' : ai.action === 'SELL' ? 'text-rose-300' : 'text-slate-300';
+        const aiBlock = mode === 'rules' ? '' : !ai ? '<div class="text-[11px] text-slate-500">🤖 AI trader: awaiting next completed bar…</div>' : `
+            <div class="p-2 rounded bg-indigo-950/40 border border-indigo-900/60 text-[11px] space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="font-bold ${aiColor}">🤖 AI ${mode === 'ai_shadow' ? '(shadow)' : ''}: ${ai.action}</span>
+                <span class="font-mono text-slate-400">conf ${ai.confidence.toFixed(2)}${ai.action !== 'NO_TRADE' ? ` · SL ${ai.stop_loss_atr}×ATR · TP ${ai.take_profit_atr}×ATR` : ''} · ${ai.timestamp}</span>
+              </div>
+              <div class="text-slate-300">${ai.thesis}</div>
+              ${ai.invalidation ? `<div class="text-slate-500">Invalidation: ${ai.invalidation}</div>` : ''}
+            </div>`;
+        const score = s.sentiment_score ?? 0;
+        const pct = Math.round(((score + 1) / 2) * 100);
+        const barColor = score >= 0.3 ? 'bg-emerald-500' : score <= -0.3 ? 'bg-rose-500' : 'bg-amber-500';
+
+        return `
+          <div class="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2">
+                <span class="font-bold text-sm text-white">${pair}</span>
+                <span class="text-xs px-2 py-0.5 rounded font-mono ${t.signal === 'BUY' ? 'bg-emerald-900 text-emerald-300' : t.signal === 'SELL' ? 'bg-rose-900 text-rose-300' : 'bg-slate-800 text-slate-400'}">
+                  Tech: ${t.signal || 'NEUTRAL'}
+                </span>
+              </div>
+              <div class="flex items-center space-x-2">
+                ${s.high_impact_risk ? '<span class="px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold animate-pulse">⚠️ HIGH IMPACT RISK</span>' : ''}
+                <span class="font-mono text-xs font-bold ${score >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                  Sent: ${score >= 0 ? '+' : ''}${score.toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div class="${barColor} h-full" style="width: ${pct}%"></div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">${s.catalyst_summary || 'Awaiting LLM analysis...'}</p>
+            ${aiBlock}
+            <div class="text-[11px] text-slate-500 font-mono">
+              Price: ${t.current_price || '-'} | RSI(14): ${t.rsi || '-'} | ATR(14): ${t.atr || '-'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Active Trades Table
+      const trades = state.open_trades || [];
+      document.getElementById('openTradeCountBadge').textContent = `${trades.length} Open`;
+      const tbody = document.getElementById('openTradesBody');
+      if (!trades.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-4 text-center text-slate-500">No open positions</td></tr>';
+      } else {
+        tbody.innerHTML = trades.map(tr => `
+          <tr>
+            <td class="py-2 text-slate-400">#${tr.id}</td>
+            <td class="py-2 font-bold text-white">${tr.instrument}</td>
+            <td class="py-2 ${tr.units > 0 ? 'text-emerald-400' : 'text-rose-400'}">${tr.side} (${tr.units})</td>
+            <td class="py-2">${tr.entry_price}</td>
+            <td class="py-2 text-slate-400">${tr.stop_loss || '-'} / ${tr.take_profit || '-'}</td>
+            <td class="py-2 font-bold ${tr.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+              ${tr.unrealized_pnl >= 0 ? '+' : ''}$${tr.unrealized_pnl.toFixed(2)}
+            </td>
+            <td class="py-2 text-right">
+              <button onclick="closeTrade('${tr.id}')" class="px-2 py-1 rounded bg-rose-600/80 hover:bg-rose-600 text-white text-[11px]">
+                Close
+              </button>
+            </td>
+          </tr>
+        `).join('');
+      }
+
+      // Logs
+      document.getElementById('decisionLogList').innerHTML = (state.decision_log || []).map(d => `
+        <div class="p-1.5 rounded bg-slate-900 border border-slate-800">
+          <span class="text-slate-500">${d.timestamp}</span>
+          <span class="text-indigo-400 font-bold">[${d.instrument}]</span>
+          <span class="text-white font-semibold">${d.action}</span>:
+          <span class="text-slate-400">${d.details}</span>
+        </div>
+      `).join('');
+
+      document.getElementById('auditLogList').innerHTML = (state.audit_log || []).map(a => `
+        <div class="p-1.5 rounded bg-slate-900 border border-slate-800">
+          <span class="text-slate-500">${a.timestamp}</span>
+          <span class="text-amber-400 font-bold">[${a.channel}]</span>
+          <span class="text-white">${a.title}</span> —
+          <span class="text-slate-400">${a.message}</span>
+        </div>
+      `).join('');
+    }
+
+    async function toggleBot() {
+      await api('/api/bot/toggle', { method: 'POST' });
+    }
+
+    async function scanNow() {
+      await api('/api/bot/scan-now', { method: 'POST' });
+      loadChart();
+    }
+
+    async function closeTrade(id) {
+      await api(`/api/trades/${id}/close`, { method: 'POST' });
+    }
+
+    async function submitManualTrade(direction) {
+      const instrument = document.getElementById('pairSelect').value;
+      const units = parseInt(document.getElementById('manualUnits').value, 10);
+      const stop_loss_pips = parseFloat(document.getElementById('manualSL').value);
+      const take_profit_pips = parseFloat(document.getElementById('manualTP').value);
+      const res = await api('/api/trades/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instrument, direction, units, stop_loss_pips, take_profit_pips })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Order Error: ' + err.detail);
+      }
+    }
+
+    async function triggerKillSwitch() {
+      if (!confirm('EMERGENCY KILL-SWITCH: Liquidate ALL open OANDA positions and halt the bot immediately?')) return;
+      await api('/api/bot/kill-switch', { method: 'POST' });
+    }
+
+    async function loadPerformance() {
+      try {
+        const res = await api('/api/performance');
+        if (!res.ok) return;
+        const p = await res.json();
+        const money = v => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`;
+        const pnlEl = document.getElementById('perfPnl');
+        pnlEl.textContent = money(p.realized_pnl);
+        pnlEl.className = `font-mono font-semibold text-base ${p.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+        document.getElementById('perfAcctPl').textContent = `OANDA account P/L: ${money(p.account_lifetime_pl || 0)}`;
+        document.getElementById('perfCount').textContent = `${p.closed_trades} (${p.wins}W / ${p.losses}L)`;
+        document.getElementById('perfWinRate').textContent = p.closed_trades ? `${(p.win_rate * 100).toFixed(0)}%` : '-';
+        document.getElementById('perfAvgWin').textContent = p.wins ? money(p.avg_win) : '-';
+        document.getElementById('perfAvgLoss').textContent = p.losses ? money(p.avg_loss) : '-';
+        document.getElementById('perfPf').textContent = p.profit_factor ?? (p.wins ? '∞' : '-');
+        document.getElementById('perfUpdated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        const body = document.getElementById('perfTradesBody');
+        if (!p.recent.length) {
+          body.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-slate-500">No closed trades yet</td></tr>';
+          return;
+        }
+        body.innerHTML = p.recent.map(t => {
+          const closed = t.close_time ? new Date(parseFloat(t.close_time) * 1000).toISOString().slice(0, 16).replace('T', ' ') : '-';
+          return `
+          <tr>
+            <td class="py-2 text-slate-400">#${t.id}</td>
+            <td class="py-2 font-bold text-white">${t.instrument}</td>
+            <td class="py-2 ${t.units > 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.side} (${t.units})</td>
+            <td class="py-2">${t.entry_price} → ${t.close_price}</td>
+            <td class="py-2 text-slate-400">${closed}</td>
+            <td class="py-2 text-right font-bold ${t.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${money(t.realized_pnl)}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) { /* transient; retried on next interval */ }
+    }
+
+    function connectWebSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'STATE_UPDATE') updateDashboard(data);
+      };
+      ws.onclose = async (event) => {
+        if (event.code === 1008) { location.href = '/login'; return; }  // Session rejected by server
+        // A handshake rejected before accept (e.g. session gone after restart) arrives as 1006; probe the API,
+        // whose 401 handler redirects to the login page
+        try { await api('/api/performance'); } catch (e) { return; }
+        setTimeout(connectWebSocket, 3000);
+      };
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initChart();
+      connectWebSocket();
+      loadPerformance();
+      setInterval(loadPerformance, 60000);
+    });
+  </script>
+</body>
+</html>
+

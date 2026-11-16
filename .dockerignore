@@ -1,0 +1,13 @@
+# Secrets are injected at runtime via env_file, never baked into the image
+.env
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.pyc
+.cache/
+.git/
+docker-compose.yml
+Dockerfile
+.dockerignore
